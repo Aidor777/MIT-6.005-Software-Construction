@@ -33,3 +33,6 @@ hs_err_pid*
 # Auto-grader Ant script report
 my-grader-report.xml
 .grader
+
+# Unused tests
+BigLibraryTest.java
