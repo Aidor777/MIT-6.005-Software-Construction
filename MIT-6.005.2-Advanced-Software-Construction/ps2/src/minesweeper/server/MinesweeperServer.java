@@ -6,8 +6,10 @@ package minesweeper.server;
 import java.io.*;
 import java.net.*;
 import java.util.*;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import minesweeper.Board;
+import minesweeper.Position;
 
 /**
  * Multiplayer Minesweeper server.
@@ -15,7 +17,14 @@ import minesweeper.Board;
 public class MinesweeperServer {
 
     // System thread safety argument
-    //   TODO Problem 5
+    // There is a unique board per server, not visible by other threads.
+    // Each client is running inside its own thread, with the minimum amount of shared mutable data as possible.
+    // The board is a thread-safe class, as all calls to public methods are synchronized.
+    // In the very special case of digging, when it is required to perform a check before the actual digging,
+    // the lock of the board is acquired so that the state of the board cannot change in between.
+    // The counter of clients, although mutable, is a thread-safe AtomicInteger, guaranteeing correctness.
+    // References to internal components of the board that could be mutated (the squares) are never shared.
+    // Regarding liveness, the board is a singleton, which will thus never try to acquire the lock to another board.
 
     /**
      * Default server port.
@@ -25,32 +34,63 @@ public class MinesweeperServer {
      * Maximum port number as defined by ServerSocket.
      */
     private static final int MAXIMUM_PORT = 65535;
+
     /**
      * Default square board size.
      */
     private static final int DEFAULT_SIZE = 10;
 
+    private static final String BYE_MESSAGE = "Bye";
+
+    private static final String BOOM_MESSAGE = "BOOM!";
+
     /**
      * Socket for receiving incoming connections.
      */
     private final ServerSocket serverSocket;
+
     /**
      * True if the server should *not* disconnect a client after a BOOM message.
      */
     private final boolean debug;
 
-    // TODO: Abstraction function, rep invariant, rep exposure
+    /**
+     * The Minesweeper board (threadsafe)
+     */
+    private final Board board;
+
+    private final AtomicInteger connectedClients = new AtomicInteger(0);
+
+    // Abstraction function
+    // Represents the server-side of a multiplayer Minesweeper game. It holds the board of the game
+    // and the amount of connected clients, and a server socket to listen to client connections
+
+    // Rep invariant
+    // The server socket is noy null, the board is not null, and the number of connected clients is >= 0
+
+    // Rep exposure
+    // All fields are private, the only public method is main()
 
     /**
      * Make a MinesweeperServer that listens for connections on port.
      *
      * @param port  port number, requires 0 <= port <= 65535
      * @param debug debug mode flag
+     * @param board the board to play with
      * @throws IOException if an error occurs opening the server socket
      */
-    public MinesweeperServer(int port, boolean debug) throws IOException {
-        serverSocket = new ServerSocket(port);
+    private MinesweeperServer(int port, boolean debug, Board board) throws IOException {
+        this.serverSocket = new ServerSocket(port);
         this.debug = debug;
+        this.board = board;
+        checkRep();
+    }
+
+    private void checkRep() {
+        assert serverSocket != null;
+        assert board != null;
+        assert connectedClients != null;
+        assert connectedClients.get() >= 0;
     }
 
     /**
@@ -60,23 +100,28 @@ public class MinesweeperServer {
      * @throws IOException if the main server socket is broken
      *                     (IOExceptions from individual clients do *not* terminate serve())
      */
-    public void serve() throws IOException {
+    private void serve() throws IOException {
         while (true) {
             // block until a client connects (force evaluation before passing it in the lambda)
-            Socket socket = serverSocket.accept();
+            Socket socket = this.serverSocket.accept();
+            this.connectedClients.incrementAndGet();
+            checkRep();
+
             // handle the client in its own dedicated thread
             new Thread(() -> {
                 try {
                     handleConnection(socket);
                 } catch (IOException e) {
-                    e.printStackTrace(); // but don't terminate serve()
+                    //e.printStackTrace(); // but Do not terminate serve()
                 } finally {
                     // each thread must be responsible for closing their connection
                     try {
+                        this.connectedClients.decrementAndGet();
                         socket.close();
                     } catch (IOException e) {
                         e.printStackTrace(); // not much we can do if that happens...
                     }
+                    checkRep();
                 }
             }).start();
         }
@@ -92,11 +137,19 @@ public class MinesweeperServer {
 
         try (BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
              PrintWriter out = new PrintWriter(socket.getOutputStream(), true)) {
+            out.println(helloMessage());
+
             for (String line = in.readLine(); line != null; line = in.readLine()) {
                 String output = handleRequest(line);
-                if (output != null) {
-                    // TODO: Consider improving spec of handleRequest to avoid use of null
-                    out.println(output);
+
+                if (BYE_MESSAGE.equals(output)) {
+                    socket.close();
+                }
+
+                out.println(output);
+
+                if (!this.debug && BOOM_MESSAGE.equals(output)) {
+                    socket.close();
                 }
             }
         }
@@ -106,53 +159,88 @@ public class MinesweeperServer {
      * Handler for client input, performing requested operations and returning an output message.
      *
      * @param input message from client
-     * @return message to client, or null if none
+     * @return message to client, or the help message if the message was not understood
      */
     private String handleRequest(String input) {
         String regex = "(look)|(help)|(bye)|"
                 + "(dig -?\\d+ -?\\d+)|(flag -?\\d+ -?\\d+)|(deflag -?\\d+ -?\\d+)";
         if (!input.matches(regex)) {
-            // invalid input
-            // TODO Problem 5
+            // invalid input, return a message explaining valid inputs
+            return helpMessage();
         }
         String[] tokens = input.split(" ");
         switch (tokens[0]) {
             case "look":
                 // 'look' request
-                // TODO Problem 5
-                break;
+                return this.board.toString();
             case "help":
                 // 'help' request
-                // TODO Problem 5
-                break;
+                return helpMessage();
             case "bye":
                 // 'bye' request
-                // TODO Problem 5
-                break;
+                return BYE_MESSAGE;
             case "dig":
                 int x = Integer.parseInt(tokens[1]);
                 int y = Integer.parseInt(tokens[2]);
+
                 // 'dig x y' request
-                // TODO Problem 5
-                break;
+                if (positionWithinBoard(x, y)) {
+                    Position position = Position.of(x, y);
+
+                    synchronized (this.board) {
+                        boolean hasBomb = board.positionContainsBomb(position);
+                        board.digAtPosition(position, hasBomb);
+
+                        if (hasBomb) {
+                            return BOOM_MESSAGE;
+                        }
+                    }
+                }
+                return this.board.toString();
             case "flag":
                 x = Integer.parseInt(tokens[1]);
                 y = Integer.parseInt(tokens[2]);
+
                 // 'flag x y' request
-                // TODO Problem 5
-                break;
+                if (positionWithinBoard(x, y)) {
+                    this.board.flagPosition(Position.of(x, y));
+                }
+                return this.board.toString();
             case "deflag":
                 x = Integer.parseInt(tokens[1]);
                 y = Integer.parseInt(tokens[2]);
+
                 // 'deflag x y' request
-                // TODO Problem 5
-                break;
+                if (positionWithinBoard(x, y)) {
+                    this.board.deflagPosition(Position.of(x, y));
+                }
+                return this.board.toString();
             default:
                 throw new UnsupportedOperationException("Should not happen");
         }
-        // TODO: Should never get here, make sure to return in each of the cases above
-        return input; // todo for testing purposes, remove later
-//        throw new UnsupportedOperationException();
+    }
+
+    /**
+     * @return a welcome message for a client that just connected
+     */
+    private String helloMessage() {
+        return "Welcome to Minesweeper. Players: " + this.connectedClients.get() + " including you. " +
+                "Board: " + board.getWidth() + " columns by " + board.getHeight() + " rows." +
+                "Type 'help' for help.";
+    }
+
+    /**
+     * @return a message explaining how to play
+     */
+    private String helpMessage() {
+        return "Send a message to perform an action. Possible messages: \"help\" (get this message again) / " +
+                "\"dig X Y\" (dig at position (X, Y) / \"flag X Y\" (flag position (X, Y)) / " +
+                "\"deflag X Y\" (remove the flag at position (X, Y)) / \"look\" (have a look at the board) / " +
+                "\"bye\" (exit the game)";
+    }
+
+    private boolean positionWithinBoard(int x, int y) {
+        return x >= 0 && y >= 0 && x < this.board.getWidth() && y < this.board.getHeight();
     }
 
     /**
@@ -275,11 +363,9 @@ public class MinesweeperServer {
      * @param port  The network port on which the server should listen, requires 0 <= port <= 65535.
      * @throws IOException if a network error occurs
      */
-    public static void runMinesweeperServer(boolean debug, Optional<File> file, int sizeX, int sizeY, int port) throws IOException {
-
-        // TODO: Continue implementation here in problem 4
-
-        MinesweeperServer server = new MinesweeperServer(port, debug);
+    private static void runMinesweeperServer(boolean debug, Optional<File> file, int sizeX, int sizeY, int port) throws IOException {
+        Board board = file.isPresent() ? Board.fromFile(file.get()) : Board.fromDimensions(sizeX, sizeY);
+        MinesweeperServer server = new MinesweeperServer(port, debug, board);
         server.serve();
     }
 }

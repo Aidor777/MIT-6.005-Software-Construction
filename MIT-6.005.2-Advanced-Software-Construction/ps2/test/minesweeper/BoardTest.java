@@ -6,7 +6,12 @@ package minesweeper;
 import org.junit.Assert;
 import org.junit.Test;
 
+import java.io.IOException;
+import java.net.URI;
+import java.net.URISyntaxException;
+import java.nio.file.Paths;
 import java.util.Arrays;
+import java.util.Objects;
 
 /**
  * Test suite for the Board data structure
@@ -142,6 +147,68 @@ public class BoardTest {
                 Arrays.asList(Square.makeSquare(false), Square.makeSquare(false)),
                 Arrays.asList(Square.makeSquare(false), Square.makeSquare(false)),
                 Arrays.asList(Square.makeSquare(false))));
+    }
+
+    @Test
+    public void testFromDimensions_ok() {
+        Board board = Board.fromDimensions(3, 5);
+        Assert.assertNotNull("Board was created", board);
+        Assert.assertEquals("Board content", "- - -\n- - -\n- - -\n- - -\n- - -", board.toString());
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void testFromDimensions_ko() {
+        Board.fromDimensions(-34, 56);
+    }
+
+    @Test
+    public void testFromFile_ok() throws Exception {
+        URI uri = Objects.requireNonNull(Thread.currentThread().getContextClassLoader()
+                .getResource("minesweeper/boards/valid-board.txt")).toURI();
+        Board board = Board.fromFile(Paths.get(uri).toFile());
+        // Test that the board was created, has the correct string representations, and try out some squares
+        Assert.assertNotNull("Board was created", board);
+        Assert.assertEquals("Board content", "- - - - - -\n- - - - - -\n- - - - - -\n- - - - - -",
+                board.toString());
+        Assert.assertTrue(board.positionContainsBomb(Position.of(5, 3)));
+        Assert.assertTrue(board.positionContainsBomb(Position.of(2, 2)));
+        Assert.assertFalse(board.positionContainsBomb(Position.of(0, 0)));
+        Assert.assertFalse(board.positionContainsBomb(Position.of(2, 3)));
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void testFromFile_ko_dimensions() throws Exception {
+        URI uri = Objects.requireNonNull(Thread.currentThread().getContextClassLoader()
+                .getResource("minesweeper/boards/invalid-dimensions.txt")).toURI();
+        Board.fromFile(Paths.get(uri).toFile());
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void testFromFile_ko_header() throws Exception {
+        URI uri = Objects.requireNonNull(Thread.currentThread().getContextClassLoader()
+                .getResource("minesweeper/boards/invalid-header.txt")).toURI();
+        Board.fromFile(Paths.get(uri).toFile());
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void testFromFile_ko_line() throws Exception {
+        URI uri = Objects.requireNonNull(Thread.currentThread().getContextClassLoader()
+                .getResource("minesweeper/boards/invalid-line.txt")).toURI();
+        Board.fromFile(Paths.get(uri).toFile());
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void testFromFile_ko_mismatchColumns() throws Exception {
+        URI uri = Objects.requireNonNull(Thread.currentThread().getContextClassLoader()
+                .getResource("minesweeper/boards/invalid-mismatch-columns.txt")).toURI();
+        Board.fromFile(Paths.get(uri).toFile());
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void testFromFile_ko_mismatchLines() throws Exception {
+        URI uri = Objects.requireNonNull(Thread.currentThread().getContextClassLoader()
+                .getResource("minesweeper/boards/invalid-mismatch-lines.txt")).toURI();
+        Board.fromFile(Paths.get(uri).toFile());
     }
     
 }

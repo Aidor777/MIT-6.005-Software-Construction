@@ -3,6 +3,7 @@
  */
 package minesweeper.server;
 
+import org.junit.Before;
 import org.junit.Test;
 
 import java.io.*;
@@ -10,23 +11,36 @@ import java.net.ConnectException;
 import java.net.Socket;
 import java.net.URISyntaxException;
 import java.net.URL;
+import java.util.HashSet;
 import java.util.Random;
+import java.util.Set;
+import java.util.stream.Collectors;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.*;
 
 /**
- * TODO
+ * Test suite for the MinesweeperServer
  */
 public class MinesweeperServerTest {
 
     private static final String LOCALHOST = "127.0.0.1";
 
-    private static final int PORT = 4000 + new Random().nextInt(1 << 15);
-
     private static final int MAX_CONNECTION_ATTEMPTS = 10;
 
-    private static final String BOARDS_PKG = "autograder/boards/";
+    private static final String BOARDS_PKG = "minesweeper/boards/";
+
+    private static final Set<Integer> portsUsed = new HashSet<>();
+
+    private static int port;
+
+    @Before
+    public void init() {
+        port = -1;
+        do {
+            port = 4000 + new Random().nextInt(1 << 15);
+        } while (portsUsed.contains(port));
+        portsUsed.add(port);
+    }
 
     /**
      * Start a MinesweeperServer in debug mode with a board file from BOARDS_PKG.
@@ -48,7 +62,7 @@ public class MinesweeperServerTest {
         }
         final String[] args = new String[]{
                 "--debug",
-                "--port", Integer.toString(PORT),
+                "--port", Integer.toString(port),
                 "--file", boardPath
         };
         Thread serverThread = new Thread(() -> MinesweeperServer.main(args));
@@ -67,7 +81,7 @@ public class MinesweeperServerTest {
         int attempts = 0;
         while (true) {
             try {
-                Socket socket = new Socket(LOCALHOST, PORT);
+                Socket socket = new Socket(LOCALHOST, port);
                 socket.setSoTimeout(3000);
                 return socket;
             } catch (ConnectException ce) {
@@ -89,14 +103,17 @@ public class MinesweeperServerTest {
     @Test(timeout = 10000)
     public void publishedTest() throws IOException {
 
-        Thread thread = startMinesweeperServer("board_file_1");
+        Thread thread = startMinesweeperServer("server-board-published.txt");
 
         Socket socket = connectToMinesweeperServer(thread);
 
         try (BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
              PrintWriter out = new PrintWriter(socket.getOutputStream(), true)) {
 
-            assertTrue("expected HELLO message", in.readLine().startsWith("Welcome"));
+            assertTrue("Welcome message", in.readLine().startsWith("Welcome"));
+
+            out.println("help");
+            assertNotNull(in.readLine());
 
             out.println("look");
             assertEquals("- - - - - - -", in.readLine());
@@ -108,6 +125,24 @@ public class MinesweeperServerTest {
             assertEquals("- - - - - - -", in.readLine());
 
             out.println("dig 3 1");
+            assertEquals("- - - - - - -", in.readLine());
+            assertEquals("- - - 1 - - -", in.readLine());
+            assertEquals("- - - - - - -", in.readLine());
+            assertEquals("- - - - - - -", in.readLine());
+            assertEquals("- - - - - - -", in.readLine());
+            assertEquals("- - - - - - -", in.readLine());
+            assertEquals("- - - - - - -", in.readLine());
+
+            out.println("flag 1 1");
+            assertEquals("- - - - - - -", in.readLine());
+            assertEquals("- F - 1 - - -", in.readLine());
+            assertEquals("- - - - - - -", in.readLine());
+            assertEquals("- - - - - - -", in.readLine());
+            assertEquals("- - - - - - -", in.readLine());
+            assertEquals("- - - - - - -", in.readLine());
+            assertEquals("- - - - - - -", in.readLine());
+
+            out.println("deflag 1 1");
             assertEquals("- - - - - - -", in.readLine());
             assertEquals("- - - 1 - - -", in.readLine());
             assertEquals("- - - - - - -", in.readLine());
@@ -131,8 +166,26 @@ public class MinesweeperServerTest {
             out.println("bye");
         }
         socket.close();
+        thread.interrupt();
     }
 
-    // TODO all the other tests
+    @Test(timeout = 10000)
+    public void testMinesweeperServer_multiClients() throws IOException {
+        Thread thread = startMinesweeperServer("server-board-published.txt");
+
+        try (Socket clientOne = connectToMinesweeperServer(thread);
+             BufferedReader inOne = new BufferedReader(new InputStreamReader(clientOne.getInputStream()));
+             PrintWriter outOne = new PrintWriter(clientOne.getOutputStream(), true)) {
+            assertTrue("Welcome message", inOne.readLine().contains("Players: 1"));
+
+            try (Socket clientTwo = connectToMinesweeperServer(thread);
+                 BufferedReader inTwo = new BufferedReader(new InputStreamReader(clientTwo.getInputStream()));
+                 PrintWriter outTwo = new PrintWriter(clientTwo.getOutputStream(), true)) {
+                assertTrue("Welcome message", inTwo.readLine().contains("Players: 2"));
+                outTwo.println("bye");
+            }
+            outOne.println("bye");
+        }
+    }
 
 }
